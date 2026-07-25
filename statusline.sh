@@ -257,9 +257,10 @@ content_width() {
   stripped="${stripped//$'\xef\xb8\x8f'/}"
 
   local -a bytes
-  # -w forces one long line so read -a doesn't only see the first wrapped
-  # line (od's default line width would otherwise silently drop the rest).
-  read -r -a bytes <<< "$(printf '%s' "$stripped" | od -An -v -tu1 -w4096)"
+  # hexdump -e '1/1 "%u "' produces space-separated byte values with full
+  # control over output format and no line-wrapping ambiguity, making it
+  # more portable across BSD and GNU implementations than od + tr.
+  read -r -a bytes <<< "$(printf '%s' "$stripped" | hexdump -v -e '1/1 "%u "')"
 
   local total=${#bytes[@]} i=0 byte nbytes cp j cont n=0 wide_count=0
   while ((i < total)); do
