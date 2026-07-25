@@ -258,18 +258,11 @@ if [ -n "$seven_day_pct" ]; then
   seven_day_str=$(badge "$seven_day_pct" 50 80 "7d" "$(printf '%.0f%%%s' "$seven_day_pct" "$seven_day_remaining_str")")
 fi
 
-segments1=()
-segments2=()
-append() {
-  local line=$1
-  local value=$2
-  [ -z "$value" ] && return
-  if [ "$line" = "1" ]; then
-    segments1+=("$value")
-  else
-    segments2+=("$value")
-  fi
-}
+# Every segment's rendered text, keyed by a stable name. A name with an empty
+# or unset value is simply skipped when rows are built below — that's also
+# what lets a config later hide a segment, or replace/add one, by just
+# setting or clearing an entry in this same map.
+declare -A SEG_TEXT
 
 ram_str=""
 if command -v free &>/dev/null; then
@@ -282,20 +275,20 @@ if command -v free &>/dev/null; then
   fi
 fi
 
-append "1" "$usage_str"
-append "1" "$seven_day_str"
-append "1" "$load_str"
-append "1" "$ram_str"
-append "1" "$context_str"
-append "2" "$model"
-append "2" "$context_size_str"
-append "2" "$claude_ram_str"
-append "2" "📁 $display_dir"
-append "2" "$repo_str"
-[ -n "$branch" ] && append "2" "🌿 $branch"
-append "2" "$pr_str"
-append "2" "$open_pr_str"
-append "2" "$account_str"
+SEG_TEXT[five_hour]="$usage_str"
+SEG_TEXT[seven_day]="$seven_day_str"
+SEG_TEXT[cpu]="$load_str"
+SEG_TEXT[ram]="$ram_str"
+SEG_TEXT[context]="$context_str"
+SEG_TEXT[model]="$model"
+SEG_TEXT[context_size]="$context_size_str"
+SEG_TEXT[claude_ram]="$claude_ram_str"
+SEG_TEXT[dir]="📁 $display_dir"
+SEG_TEXT[repo]="$repo_str"
+[ -n "$branch" ] && SEG_TEXT[branch]="🌿 $branch"
+SEG_TEXT[pr]="$pr_str"
+SEG_TEXT[open_pr]="$open_pr_str"
+SEG_TEXT[account]="$account_str"
 
 # Greedily pack each line's segments into as many rows as needed so no row's
 # content overruns the box — instead of overflowing, it wraps. Rows are kept
@@ -328,9 +321,28 @@ wrap_segments() {
   [ -n "$current" ] && _rows+=("$current")
 }
 
+# Segment order and row grouping: each element is a space-separated list of
+# SEG_TEXT names, and each element wraps into its own row(s) independently —
+# this is what keeps the badge row and the identity row visually separate
+# even as either wraps onto multiple lines. Segment names are simple
+# identifiers (never containing spaces), so unquoted word-splitting below is
+# safe. This is the built-in default; a config replaces SEG_GROUPS wholesale.
+# (Named SEG_GROUPS, not GROUPS: the latter is a bash built-in — the
+# invoking user's group-ID list — and silently refuses reassignment.)
+SEG_GROUPS=(
+  "five_hour seven_day cpu ram context"
+  "model context_size claude_ram dir repo branch pr open_pr account"
+)
+
 rows=()
-wrap_segments segments1 rows
-wrap_segments segments2 rows
+for group in "${SEG_GROUPS[@]}"; do
+  seg_values=()
+  for name in $group; do
+    val="${SEG_TEXT[$name]:-}"
+    [ -n "$val" ] && seg_values+=("$val")
+  done
+  wrap_segments seg_values rows
+done
 row_count=${#rows[@]}
 
 # --- Border palette --------------------------------------------------------
