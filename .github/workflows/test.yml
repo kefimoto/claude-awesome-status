@@ -48,6 +48,23 @@ jobs:
       - name: bash version
         run: bash --version | head -1
 
+      - name: Debug environment (macOS only)
+        if: runner.os == 'macOS'
+        run: |
+          echo "PATH=$PATH"
+          echo "---"
+          echo "which gh:"
+          which gh || echo "  (not found)"
+          echo "which claude:"
+          which claude || echo "  (not found)"
+          echo "---"
+          export PATH="$PWD/test/stubbin:$PATH"
+          echo "After prepending stubbin:"
+          echo "which gh:"
+          which gh
+          echo "which claude:"
+          which claude || echo "  (not found)"
+
       - name: Syntax check
         run: |
           bash -n statusline.sh
