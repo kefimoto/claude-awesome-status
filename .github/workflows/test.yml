@@ -1,0 +1,57 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: shellcheck statusline.sh install.sh test/run.sh test/render.sh test/stubbin/*
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq bc
+          python3 -m pip install --user pyyaml || python3 -m pip install --user --break-system-packages pyyaml
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          # macOS ships bash 3.2 by default; this project needs 4.3+ (see
+          # README Requirements and statusline.sh's own version guard).
+          brew install bash jq bc
+          echo "$(brew --prefix bash)/bin" >> "$GITHUB_PATH"
+          python3 -m pip install --user pyyaml || python3 -m pip install --user --break-system-packages pyyaml
+
+      - name: bash version
+        run: bash --version | head -1
+
+      - name: Syntax check
+        run: |
+          bash -n statusline.sh
+          bash -n install.sh
+
+      - name: Run test suite
+        run: bash test/run.sh
