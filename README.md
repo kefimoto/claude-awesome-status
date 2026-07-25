@@ -31,10 +31,16 @@ Rows wrap automatically to fit your terminal width, and every segment is padding
 
 ```bash
 git clone https://github.com/kefimoto/claude-awesome-status.git
-chmod +x claude-awesome-status/statusline.sh
+./claude-awesome-status/install.sh
 ```
 
-Then point Claude Code at it in `~/.claude/settings.json`:
+That's it — restart Claude Code (or start a new session) and the boxed statusline replaces the default one-liner. `install.sh` only touches the `statusLine` key in `~/.claude/settings.json`; everything else in that file (hooks, permissions, plugins, whatever else is in there) is left exactly as it was, and a timestamped backup is written before any change. Safe to re-run — it's a no-op if `statusLine` already points here.
+
+Prefer not to run a script against your own settings file? The manual equivalent:
+
+```bash
+chmod +x claude-awesome-status/statusline.sh
+```
 
 ```json
 {
@@ -44,8 +50,6 @@ Then point Claude Code at it in `~/.claude/settings.json`:
   }
 }
 ```
-
-Start (or restart) a Claude Code session and the boxed statusline replaces the default one-liner.
 
 ## Config file
 
