@@ -256,21 +256,15 @@ content_width() {
   # strip it so it doesn't inflate the count.
   stripped="${stripped//$'\xef\xb8\x8f'/}"
 
-  # Pure bash byte extraction with no external tools: iterate through the
-  # string as a series of printf statements to get each byte value. This
-  # avoids any incompatibilities between od/hexdump across BSD/GNU.
-  local n=0 wide_count=0 i byte nbytes cp j cont
-  local -a bytes=()
-  for ((i = 0; i < ${#stripped}; i++)); do
-    byte=$(printf '%d' "'${stripped:i:1}" 2>/dev/null || echo 0)
-    # Skip invalid conversions (e.g., multi-byte UTF-8 characters where we
-    # only extract the first byte via :i:1 — those will show up in subsequent
-    # loop iterations as their other bytes)
-    bytes+=("$byte")
-  done
+  local -a bytes
+  # od wraps at a line width that isn't standardized across
+  # implementations (-w to control it is a GNU/BSD extension, not POSIX,
+  # and not trusted to behave identically everywhere) — flatten to one
+  # line with tr before read -a, or read -a silently sees only the first
+  # wrapped line and drops the rest.
+  read -r -a bytes <<< "$(printf '%s' "$stripped" | od -An -v -tu1 | tr '\n' ' ')"
 
-  # Decode the byte array as UTF-8 and count display columns
-  local total=${#bytes[@]} i=0 byte nbytes
+  local total=${#bytes[@]} i=0 byte nbytes cp j cont n=0 wide_count=0
   while ((i < total)); do
     byte=${bytes[i]}
     if   ((byte < 0x80)); then nbytes=1
