@@ -19,6 +19,130 @@ badge() {
   fi
 }
 
+# --- Config -----------------------------------------------------------------
+# An optional JSON or YAML file overriding style, thresholds, segment order
+# and grouping. Resolution order: $CAS_CONFIG verbatim (no fallback search —
+# this is also how tests force the no-config default path with
+# CAS_CONFIG=/dev/null), then the first readable file among a fixed set of
+# XDG-ish locations, then no config at all.
+resolve_config_path() {
+  if [ -n "${CAS_CONFIG:-}" ]; then
+    printf '%s' "$CAS_CONFIG"
+    return
+  fi
+  local base="${XDG_CONFIG_HOME:-$HOME/.config}/claude-awesome-status"
+  local c
+  for c in "$base/config.json" "$base/config.yaml" "$base/config.yml" \
+           "$HOME/.claude/claude-awesome-status.json" \
+           "$HOME/.claude/claude-awesome-status.yaml" \
+           "$HOME/.claude/claude-awesome-status.yml"; do
+    if [ -r "$c" ] && [ ! -d "$c" ]; then
+      printf '%s' "$c"
+      return
+    fi
+  done
+}
+
+cfg_path="$(resolve_config_path)"
+# /dev/null is the documented way to disable config (tests rely on this to
+# exercise built-in defaults); an unreadable path or a directory is the same
+# as no config at all rather than an error.
+if [ -z "$cfg_path" ] || [ "$cfg_path" = "/dev/null" ] || [ ! -r "$cfg_path" ] || [ -d "$cfg_path" ]; then
+  cfg_path=""
+fi
+
+# cfg_json is a path to a JSON file jq can read directly — either cfg_path
+# itself, or a cached JSON conversion of it if it was YAML. Left empty when
+# there's no config, which is what keeps cfg_get below at zero forks for the
+# overwhelming common case of a user who never wrote a config file.
+cfg_json=""
+if [ -n "$cfg_path" ]; then
+  case "$cfg_path" in
+    *.yaml | *.yml)
+      cache_dir="${CAS_CACHE_DIR:-/tmp}"
+      cache_file="$cache_dir/.claude-awesome-status-cfg-$(printf '%s' "$cfg_path" | tr '/' '_').json"
+      if [ -s "$cache_file" ] && [ ! "$cfg_path" -nt "$cache_file" ]; then
+        cfg_json="$cache_file"
+      else
+        converted=""
+        if command -v yq &>/dev/null; then
+          # Two incompatible programs share this name; try both forms rather
+          # than fork a version probe.
+          converted=$(yq -o=json -I0 '.' "$cfg_path" 2>/dev/null)
+          [ -z "$converted" ] && converted=$(yq -c '.' "$cfg_path" 2>/dev/null)
+        fi
+        if [ -z "$converted" ] && command -v python3 &>/dev/null; then
+          converted=$(python3 -c '
+import sys, json
+try:
+    import yaml
+except ImportError:
+    sys.exit(3)
+try:
+    json.dump(yaml.safe_load(open(sys.argv[1], encoding="utf-8")) or {}, sys.stdout)
+except Exception:
+    sys.exit(4)
+' "$cfg_path" 2>/dev/null)
+        fi
+        # Neither converter available, or the YAML itself is invalid: degrade
+        # to no config rather than fail the whole statusline. A prior good
+        # cached conversion (e.g. from before a typo) is kept and reused.
+        if [ -n "$converted" ]; then
+          printf '%s' "$converted" > "$cache_file.$$" && mv -f "$cache_file.$$" "$cache_file"
+          cfg_json="$cache_file"
+        elif [ -s "$cache_file" ]; then
+          cfg_json="$cache_file"
+        fi
+      fi
+      ;;
+    *)
+      cfg_json="$cfg_path"
+      ;;
+  esac
+fi
+
+# $1: jq filter, $2: default. Malformed JSON, the wrong top-level shape, or a
+# missing field all fall back to the default rather than erroring — jq's own
+# failure (empty stdout) is indistinguishable from "field absent" here, which
+# is exactly the fail-closed behavior a config file should have.
+cfg_get() {
+  local out
+  if [ -z "$cfg_json" ]; then
+    printf '%s' "$2"
+    return
+  fi
+  out=$(jq -r "$1" "$cfg_json" 2>/dev/null)
+  if [ -z "$out" ] || [ "$out" = "null" ]; then
+    printf '%s' "$2"
+  else
+    printf '%s' "$out"
+  fi
+}
+
+# Same, but rejects a non-numeric result instead of passing it through — a
+# threshold ends up in badge()'s bc/arithmetic, where a hostile string would
+# otherwise be a shell-injection-shaped bug, not just a cosmetic one.
+cfg_get_num() {
+  local v
+  v="$(cfg_get "$1" "$2")"
+  if [[ "$v" =~ ^-?[0-9]+(\.[0-9]+)?$ ]]; then
+    printf '%s' "$v"
+  else
+    printf '%s' "$2"
+  fi
+}
+
+thr_five_hour_yellow="$(cfg_get_num '.thresholds.five_hour.yellow // empty' 50)"
+thr_five_hour_red="$(cfg_get_num '.thresholds.five_hour.red // empty' 80)"
+thr_seven_day_yellow="$(cfg_get_num '.thresholds.seven_day.yellow // empty' 50)"
+thr_seven_day_red="$(cfg_get_num '.thresholds.seven_day.red // empty' 80)"
+thr_cpu_yellow="$(cfg_get_num '.thresholds.cpu.yellow // empty' 70)"
+thr_cpu_red="$(cfg_get_num '.thresholds.cpu.red // empty' 100)"
+thr_ram_yellow="$(cfg_get_num '.thresholds.ram.yellow // empty' 50)"
+thr_ram_red="$(cfg_get_num '.thresholds.ram.red // empty' 80)"
+thr_context_yellow="$(cfg_get_num '.thresholds.context.yellow // empty' 50)"
+thr_context_red="$(cfg_get_num '.thresholds.context.red // empty' 75)"
+
 model=$(echo "$input" | jq -r '.model.display_name // empty')
 model_emoji=""
 if [[ "$model" =~ Haiku ]]; then
@@ -199,7 +323,7 @@ if [ -f "$loadavg_file" ]; then
   read load1 load5 load15 < "$loadavg_file"
   cpus=$(nproc 2>/dev/null || echo 1)
   load_pct=$(awk "BEGIN { printf \"%.0f\", ($load1 / $cpus) * 100 }")
-  load_str=$(badge "$load_pct" 70 100 "cpu" "$(printf '%d%%' "$load_pct")")
+  load_str=$(badge "$load_pct" "$thr_cpu_yellow" "$thr_cpu_red" "cpu" "$(printf '%d%%' "$load_pct")")
 fi
 
 used_pct=$(echo "$input" | jq -r '.context_window.used_percentage // empty')
@@ -223,7 +347,7 @@ if [ -n "$used_pct" ] && [ -n "$context_size" ]; then
     size_display="$context_size"
   fi
 
-  context_str=$(badge "$used_pct" 50 75 "ctx" "$(printf '%.0f%%' "$used_pct")")
+  context_str=$(badge "$used_pct" "$thr_context_yellow" "$thr_context_red" "ctx" "$(printf '%.0f%%' "$used_pct")")
 fi
 
 five_hour_pct=$(echo "$input" | jq -r '.rate_limits.five_hour.used_percentage // empty')
@@ -242,7 +366,7 @@ if [ -n "$five_hour_pct" ]; then
       remaining_str=$(printf " %dh%dm" "$remaining_h" "$remaining_m")
     fi
   fi
-  usage_str=$(badge "$five_hour_pct" 50 80 "5h" "$(printf '%.0f%%%s' "$five_hour_pct" "$remaining_str")")
+  usage_str=$(badge "$five_hour_pct" "$thr_five_hour_yellow" "$thr_five_hour_red" "5h" "$(printf '%.0f%%%s' "$five_hour_pct" "$remaining_str")")
 fi
 if [ -n "$seven_day_pct" ]; then
   seven_day_remaining_str=""
@@ -255,7 +379,7 @@ if [ -n "$seven_day_pct" ]; then
       seven_day_remaining_str=$(printf " %dd%dh" "$seven_day_remaining_d" "$seven_day_remaining_h")
     fi
   fi
-  seven_day_str=$(badge "$seven_day_pct" 50 80 "7d" "$(printf '%.0f%%%s' "$seven_day_pct" "$seven_day_remaining_str")")
+  seven_day_str=$(badge "$seven_day_pct" "$thr_seven_day_yellow" "$thr_seven_day_red" "7d" "$(printf '%.0f%%%s' "$seven_day_pct" "$seven_day_remaining_str")")
 fi
 
 # Every segment's rendered text, keyed by a stable name. A name with an empty
@@ -271,7 +395,7 @@ if command -v free &>/dev/null; then
     used_num=$(echo "$used" | sed 's/G//')
     total_num=$(echo "$total" | sed 's/G//')
     ram_pct=$(awk "BEGIN { printf \"%.0f\", ($used_num / $total_num) * 100 }")
-    ram_str=$(badge "$ram_pct" 50 80 "ram" "${ram_pct}%")
+    ram_str=$(badge "$ram_pct" "$thr_ram_yellow" "$thr_ram_red" "ram" "${ram_pct}%")
   fi
 fi
 
@@ -289,6 +413,15 @@ SEG_TEXT[repo]="$repo_str"
 SEG_TEXT[pr]="$pr_str"
 SEG_TEXT[open_pr]="$open_pr_str"
 SEG_TEXT[account]="$account_str"
+
+# A config can hide built-in segments by name; unknown names are harmless
+# since SEG_TEXT simply never had that key.
+if [ -n "$cfg_json" ]; then
+  mapfile -t cfg_hide < <(jq -r '(.hide // empty) | if type == "array" then .[] | select(type == "string") else empty end' "$cfg_json" 2>/dev/null)
+  for hidden in "${cfg_hide[@]:-}"; do
+    [ -n "$hidden" ] && unset "SEG_TEXT[$hidden]"
+  done
+fi
 
 # Greedily pack each line's segments into as many rows as needed so no row's
 # content overruns the box — instead of overflowing, it wraps. Rows are kept
@@ -334,6 +467,14 @@ SEG_GROUPS=(
   "model context_size claude_ram dir repo branch pr open_pr account"
 )
 
+# A config's "groups" (array of arrays of segment names) replaces the
+# default wholesale. A malformed entry (wrong shape) is dropped rather than
+# aborting the whole override, so one bad group doesn't blank every group.
+if [ -n "$cfg_json" ]; then
+  mapfile -t cfg_groups < <(jq -r '(.groups // empty) | if type == "array" then .[] | if type == "array" then ([.[] | select(type == "string")] | join(" ")) else empty end else empty end' "$cfg_json" 2>/dev/null)
+  [ "${#cfg_groups[@]}" -gt 0 ] && SEG_GROUPS=("${cfg_groups[@]}")
+fi
+
 rows=()
 for group in "${SEG_GROUPS[@]}"; do
   seg_values=()
@@ -351,8 +492,9 @@ row_count=${#rows[@]}
 # index into it, so adding a style never touches the rendering code.
 # rainbow (the default) is a single awk call computing an unrounded per-column
 # hue; solid/none are built directly in bash with zero forks.
-style="${CAS_STYLE:-rainbow}"
-style_color="${CAS_STYLE_COLOR:-#00afff}"
+style="${CAS_STYLE:-$(cfg_get '.style // empty' 'rainbow')}"
+style_color="${CAS_STYLE_COLOR:-$(cfg_get '.style_options.color // empty' '#00afff')}"
+[[ "$style_color" =~ ^\#?[0-9a-fA-F]{6}$ ]] || style_color="#00afff"
 
 PAL=()
 case "$style" in

@@ -1,0 +1,12 @@
+{
+  "style": "solid",
+  "style_options": { "color": "#5f87af" },
+  "thresholds": {
+    "cpu": { "yellow": 1, "red": 2 }
+  },
+  "hide": ["account"],
+  "groups": [
+    ["five_hour", "seven_day", "cpu", "ram", "context"],
+    ["dir", "model", "repo", "branch", "pr", "open_pr"]
+  ]
+}
