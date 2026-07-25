@@ -237,31 +237,56 @@ if [ -n "$claude_pid" ]; then
 fi
 n_dashes=$((box_width - 2))
 
-# Pure bash, zero forks — deliberately not sed+grep -P+wc. grep -P is a GNU
-# extension; macOS's default BSD grep doesn't have it at all, and the
-# \x{1F000}-style codepoint ranges below are PCRE syntax with no valid POSIX
-# ERE equivalent, so there was no portable regex-based version of this to
-# fall back to. This is also the hottest path in the script (called on every
-# segment, every render), so the fork elimination is a real perf win too —
-# not just a portability fix.
+# Decodes UTF-8 from raw byte values (via od) rather than trusting bash's
+# own ${var:i:1} character indexing, which is locale-dependent: under a
+# non-UTF-8 locale it silently switches to byte-wise, breaking every width
+# calculation that touches an emoji or box-drawing character. Observed on
+# GitHub's macOS runners, which don't default to a UTF-8 locale — grep -P
+# with \x{1F000}-style PCRE codepoint ranges (the previous approach here)
+# isn't available there anyway (BSD grep has no -P at all), and has no
+# POSIX ERE equivalent, so there was no portable regex-based fallback
+# either. od is locale-blind by design, which is exactly what's needed:
+# this must give the same answer everywhere, not just under UTF-8.
 content_width() {
-  local content="$1" stripped ch cp i n wide_count=0
+  local content="$1" stripped
   printf -v stripped '%b' "$content"
   stripped="${stripped//$'\e'\[*([0-9;])m/}"
   # U+FE0F (emoji variation selector, e.g. the second codepoint in "⚠️") is a
   # zero-width modifier but bash counts it as a normal 1-column character —
   # strip it so it doesn't inflate the count.
   stripped="${stripped//$'\xef\xb8\x8f'/}"
-  n=${#stripped}
-  for ((i = 0; i < n; i++)); do
-    ch=${stripped:i:1}
-    printf -v cp '%d' "'$ch"
+
+  local -a bytes
+  # -w forces one long line so read -a doesn't only see the first wrapped
+  # line (od's default line width would otherwise silently drop the rest).
+  read -r -a bytes <<< "$(printf '%s' "$stripped" | od -An -v -tu1 -w4096)"
+
+  local total=${#bytes[@]} i=0 byte nbytes cp j cont n=0 wide_count=0
+  while ((i < total)); do
+    byte=${bytes[i]}
+    if   ((byte < 0x80)); then nbytes=1
+    elif ((byte >= 0xC0 && byte < 0xE0)); then nbytes=2
+    elif ((byte >= 0xE0 && byte < 0xF0)); then nbytes=3
+    elif ((byte >= 0xF0 && byte < 0xF8)); then nbytes=4
+    else nbytes=1
+    fi
+    if   ((nbytes == 1)); then cp=$byte
+    elif ((nbytes == 2)); then cp=$((byte & 0x1F))
+    elif ((nbytes == 3)); then cp=$((byte & 0x0F))
+    else cp=$((byte & 0x07))
+    fi
+    for ((j = 1; j < nbytes && i + j < total; j++)); do
+      cont=${bytes[i + j]}
+      cp=$(((cp << 6) | (cont & 0x3F)))
+    done
     # Wide (emoji/CJK) codepoints render as 2 terminal columns but count as 1
     # bash character, so each one found needs an extra column added.
     if   ((cp >= 0x1F000 && cp <= 0x1FFFF)); then ((wide_count++))
     elif ((cp >= 0x2600  && cp <= 0x27BF));  then ((wide_count++))
     elif ((cp >= 0x2B00  && cp <= 0x2BFF));  then ((wide_count++))
     fi
+    ((n++))
+    ((i += nbytes))
   done
   echo $((n + wide_count))
 }
