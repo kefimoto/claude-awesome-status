@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 # Render one fixture through statusline.sh under fully stubbed system state,
 # so output depends only on the script and the fixture — not on this machine's
-# load, memory, clock, or checkout. Usage: render.sh <fixture> [config]
+# load, memory, clock, or checkout.
+# Usage: render.sh <fixture> [config] [columns] [style[:color]]
+#
+# columns pins the terminal width via the stty stub. Left empty, the ps stub
+# reports no tty so the script falls back to its built-in 80. That fallback is
+# the one width where the border/wall color math is provably rounding-immune,
+# so a width must be pinned to exercise anything else.
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -9,6 +15,14 @@ repo=$(dirname "$here")
 
 fixture="$1"
 config="${2:-}"
+columns="${3:-}"
+style="${4:-}"
+
+[ -n "$columns" ] && export CAS_TEST_COLUMNS="$columns"
+if [ -n "$style" ]; then
+  export CAS_STYLE="${style%%:*}"
+  [[ "$style" == *:* ]] && export CAS_STYLE_COLOR="${style#*:}"
+fi
 
 export PATH="$here/stubbin:$PATH"
 # Fixed tick => the animated border lands on the same frame every run.

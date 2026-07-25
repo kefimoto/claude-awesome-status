@@ -333,39 +333,68 @@ wrap_segments segments1 rows
 wrap_segments segments2 rows
 row_count=${#rows[@]}
 
-hue_color() {
-  local h="$1"
-  local offset="${2:-0}"
-  awk -v h="$h" -v offset="$offset" 'BEGIN {
-    h = h + offset
-    h = h - int(h/6)*6
-    if (h < 1)      { r=255; g=int(255*(h-int(h))); b=0 }
-    else if (h < 2) { r=int(255*(2-h)); g=255; b=0 }
-    else if (h < 3) { r=0; g=255; b=int(255*(h-2)) }
-    else if (h < 4) { r=0; g=int(255*(4-h)); b=255 }
-    else if (h < 5) { r=int(255*(h-4)); g=0; b=255 }
-    else            { r=255; g=0; b=int(255*(6-h)) }
-    printf "\033[38;2;%d;%d;%dm", r, g, b
-  }'
-}
+# --- Border palette --------------------------------------------------------
+# One color escape per column, PAL[0..n_dashes-1]. A style just fills this
+# array differently — border assembly and wall placement below only ever
+# index into it, so adding a style never touches the rendering code.
+# rainbow (the default) is a single awk call computing an unrounded per-column
+# hue; solid/none are built directly in bash with zero forks.
+style="${CAS_STYLE:-rainbow}"
+style_color="${CAS_STYLE_COLOR:-#00afff}"
 
-# Rainbow advances one tick per statusline execution, so the gradient
-# visibly shifts each time this script runs.
-tick_file="${CAS_TICK_FILE:-/tmp/.claude-statusline-tick}"
-tick_steps=40
-tick=0
-[ -f "$tick_file" ] && tick=$(cat "$tick_file")
-echo $(( (tick + 1) % tick_steps )) > "$tick_file"
-rainbow_offset=$(awk -v tick="$tick" -v steps="$tick_steps" 'BEGIN { printf "%.4f", (tick / steps) * 6.0 }')
+PAL=()
+case "$style" in
+  solid)
+    hex="${style_color#\#}"
+    r=$((16#${hex:0:2})); g=$((16#${hex:2:2})); b=$((16#${hex:4:2}))
+    esc=$(printf '\033[38;2;%d;%d;%dm' "$r" "$g" "$b")
+    for ((i = 0; i < n_dashes; i++)); do PAL+=("$esc"); done
+    ;;
+  none)
+    for ((i = 0; i < n_dashes; i++)); do PAL+=(""); done
+    ;;
+  *)
+    # rainbow, and the fallback for any unrecognized style. Advances one
+    # tick per statusline execution, so the gradient visibly shifts each
+    # time this script runs.
+    tick_file="${CAS_TICK_FILE:-/tmp/.claude-statusline-tick}"
+    tick_steps=40
+    tick=0
+    [ -f "$tick_file" ] && tick=$(cat "$tick_file")
+    echo $(( (tick + 1) % tick_steps )) > "$tick_file"
+    mapfile -t PAL < <(awk -v n="$n_dashes" -v tick="$tick" -v steps="$tick_steps" '
+      function wheel(h,  r,g,b) {
+        h = h - int(h/6)*6
+        if (h < 1)      { r=255; g=int(255*(h-int(h))); b=0 }
+        else if (h < 2) { r=int(255*(2-h)); g=255; b=0 }
+        else if (h < 3) { r=0; g=255; b=int(255*(h-2)) }
+        else if (h < 4) { r=0; g=int(255*(4-h)); b=255 }
+        else if (h < 5) { r=int(255*(h-4)); g=0; b=255 }
+        else            { r=255; g=0; b=int(255*(6-h)) }
+        return sprintf("\033[38;2;%d;%d;%dm", r, g, b)
+      }
+      BEGIN {
+        off = sprintf("%.4f", (tick / steps) * 6.0) + 0
+        for (i = 0; i < n; i++) print wheel((i / n) * 6.0 + off)
+      }')
+    ;;
+esac
+# A style producing the wrong number of lines (a bad awk formula, in the
+# future custom-style case) must never leave the palette short — fail closed
+# to uncolored rather than corrupt every index after the gap.
+if [ "${#PAL[@]}" -ne "$n_dashes" ]; then
+  PAL=()
+  for ((i = 0; i < n_dashes; i++)); do PAL+=(""); done
+fi
 
 # Lay out a row's segments so the slack (n_dashes minus what the segments
 # and their walls actually need) is split evenly across every segment, not
 # just at the row's outer edges — each segment's own slice is then centered
 # within its share, and the row fills the interior width exactly.
-# A wall's rainbow hue depends only on its column, so walls are colored
-# inline here using the same per-column formula the border uses — they end
-# up continuous with the border gradient. Wall columns are recorded into
-# wall_at[k,i] as they're placed, for build_border_chars to read later.
+# A wall's color depends only on its column, so walls are colored by
+# indexing the same palette the border uses — they end up continuous with
+# it. Wall columns are recorded into wall_at[k,i] as they're placed, for
+# build_border_glyphs to read later.
 declare -A wall_at
 layout_row() {
   local k="$1" raw="$2"
@@ -395,8 +424,7 @@ layout_row() {
     pos=$((pos + pad_i + $(content_width "${segs[$i]}")))
     if [ "$i" -lt "$((n - 1))" ]; then
       wall_at["$k,$pos"]=1
-      h=$(awk -v i="$pos" -v n="$n_dashes" 'BEGIN { printf "%.6f", (i / n) * 6.0 }')
-      built+="$(hue_color "$h" "$rainbow_offset")│\033[0m"
+      built+="${PAL[$pos]}│\033[0m"
       pos=$((pos + 1))
     fi
   done
@@ -411,33 +439,47 @@ for ((k = 0; k < row_count; k++)); do
   rows[$k]="$LAYOUT_RESULT"
 done
 
-right_h=$(awk -v n="$n_dashes" 'BEGIN { printf "%.6f", ((n - 1) / n) * 6.0 }')
+right_col=$((n_dashes - 1))
 
-rainbow_line() {
-  local left="$1" right="$2" chars="$3"
-  local left_color=$(hue_color 0 "$rainbow_offset")
-  local right_color=$(hue_color "$right_h" "$rainbow_offset")
-  awk -v left="$left" -v right="$right" -v lc="$left_color" -v rc="$right_color" -v offset="$rainbow_offset" -v chars="$chars" -v n="$n_dashes" 'BEGIN {
-    printf "%s%s\033[0m", lc, left
-    for (i = 0; i < n; i++) {
-      h = (i / n) * 6.0 + offset
-      h = h - int(h/6)*6
-      if (h < 1)      { r=255; g=int(255*(h-int(h))); b=0 }
-      else if (h < 2) { r=int(255*(2-h)); g=255; b=0 }
-      else if (h < 3) { r=0; g=255; b=int(255*(h-2)) }
-      else if (h < 4) { r=0; g=int(255*(4-h)); b=255 }
-      else if (h < 5) { r=int(255*(h-4)); g=0; b=255 }
-      else            { r=255; g=0; b=int(255*(6-h)) }
-      glyph = substr(chars, i + 1, 1)
-      if (glyph == "") glyph = "─"
-      printf "\033[38;2;%d;%d;%dm%s", r, g, b, glyph
-    }
-    printf "%s%s\033[0m", rc, right
-  }'
+# Border b sits above row b (its walls become ┬) and below row b-1 (┴); where
+# both apply, ┼. build_border_glyphs fills a caller-provided array (one glyph
+# per column) rather than a string, so a multibyte glyph is never sliced by
+# byte offset under a non-UTF-8 locale.
+build_border_glyphs() {
+  local above="$1" below="$2"
+  local -n _out="$3"
+  _out=()
+  local i has_above has_below
+  for ((i = 0; i < n_dashes; i++)); do
+    has_above=0
+    has_below=0
+    [ "$above" -ge 0 ] && [ -n "${wall_at[$above,$i]:-}" ] && has_above=1
+    [ "$below" -ge 0 ] && [ -n "${wall_at[$below,$i]:-}" ] && has_below=1
+    if [ "$has_above" = 1 ] && [ "$has_below" = 1 ]; then
+      _out+=("┼")
+    elif [ "$has_above" = 1 ]; then
+      _out+=("┴")
+    elif [ "$has_below" = 1 ]; then
+      _out+=("┬")
+    else
+      _out+=("─")
+    fi
+  done
 }
 
-left_bar="$(hue_color 0 "$rainbow_offset")│\033[0m"
-right_bar="$(hue_color "$right_h" "$rainbow_offset")│\033[0m"
+render_border_line() {
+  local lc="$1" rc="$2"
+  local -n _glyphs="$3"
+  local i out="${PAL[0]}${lc}\033[0m"
+  for ((i = 0; i < n_dashes; i++)); do
+    out+="${PAL[$i]}${_glyphs[$i]}"
+  done
+  out+="${PAL[$right_col]}${rc}\033[0m"
+  printf '%s' "$out"
+}
+
+left_bar="${PAL[0]}│\033[0m"
+right_bar="${PAL[$right_col]}│\033[0m"
 
 pad_row() {
   # layout_row already sizes content to exactly n_dashes columns; this only
@@ -448,28 +490,6 @@ pad_row() {
   local pad=$((n_dashes - w))
   [ "$pad" -lt 0 ] && pad=0
   printf "%b%b%*s%b" "$left_bar" "$content" "$pad" "" "$right_bar"
-}
-
-# Border b sits above row b (its walls become ┬) and below row b-1 (┴);
-# where both apply, ┼. b=0 is the top border, b=row_count the bottom.
-build_border_chars() {
-  local above="$1" below="$2" out="" i has_above has_below
-  for ((i = 0; i < n_dashes; i++)); do
-    has_above=0
-    has_below=0
-    [ "$above" -ge 0 ] && [ -n "${wall_at[$above,$i]:-}" ] && has_above=1
-    [ "$below" -ge 0 ] && [ -n "${wall_at[$below,$i]:-}" ] && has_below=1
-    if [ "$has_above" = 1 ] && [ "$has_below" = 1 ]; then
-      out+="┼"
-    elif [ "$has_above" = 1 ]; then
-      out+="┴"
-    elif [ "$has_below" = 1 ]; then
-      out+="┬"
-    else
-      out+="─"
-    fi
-  done
-  printf '%s' "$out"
 }
 
 output_lines=()
@@ -484,8 +504,8 @@ for ((b = 0; b <= row_count; b++)); do
   else
     lc="├"; rc="┤"
   fi
-  border_chars="$(build_border_chars "$above" "$below")"
-  output_lines+=("$(rainbow_line "$lc" "$rc" "$border_chars")")
+  build_border_glyphs "$above" "$below" border_glyphs
+  output_lines+=("$(render_border_line "$lc" "$rc" border_glyphs)")
   [ "$b" -lt "$row_count" ] && output_lines+=("$(pad_row "${rows[$b]}")")
 done
 

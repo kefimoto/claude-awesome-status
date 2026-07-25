@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Fixed terminal size. CAS_TEST_COLUMNS lets a test pin the box width so the
+# width-dependent color math is actually reachable.
+echo "24 ${CAS_TEST_COLUMNS:-142}"

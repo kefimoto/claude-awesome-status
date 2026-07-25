@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Deterministic `ps` stub for render tests.
 #   comm= -> always "claude", so the ancestry walk stops at the first candidate
-#   tty=  -> "?", so box_width falls back to the fixed default (80)
+#   tty=  -> a real name only when CAS_TEST_COLUMNS is set, so by default the
+#            box_width probe fails its gate and falls back to 80; with it set the
+#            script consults the stty stub and a wide box becomes reachable
 #   rss=  -> fixed self RSS
 #   -eo   -> empty table, so the child-RSS sum is a stable 0
 case "$*" in
   *"-o comm="*) echo "claude" ;;
   *"-o ppid="*) echo "1" ;;
-  *"-o tty="*)  echo "?" ;;
+  *"-o tty="*)  if [ -n "${CAS_TEST_COLUMNS:-}" ]; then echo "pts/9"; else echo "?"; fi ;;
   *"-o rss="*)  echo "412000" ;;
   *"-eo pid,ppid,rss"*) : ;;
   *) : ;;
