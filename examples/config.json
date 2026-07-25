@@ -1,0 +1,43 @@
+{
+  "_comment": "claude-awesome-status config. JSON has no comment syntax and this file's parser does NOT strip '//' comments — a stray // line makes the whole file unparseable (silently: it just falls back to defaults). Use _-prefixed keys for notes instead, like this one; unknown keys are always ignored.",
+
+  "style": "solid",
+  "style_options": {
+    "_comment": "Only 'solid' reads style_options.color; other styles ignore it.",
+    "color": "#5f87af"
+  },
+
+  "thresholds": {
+    "_comment": "Any threshold you omit keeps its built-in default.",
+    "five_hour": { "yellow": 60, "red": 85 },
+    "cpu":       { "yellow": 80, "red": 120 }
+  },
+
+  "groups": [
+    ["five_hour", "seven_day", "cpu", "ram", "context"],
+    ["model", "dir", "repo", "branch", "pr", "open_pr"],
+    ["k8s", "worktree"]
+  ],
+  "hide": ["account"],
+
+  "max_rows": 4,
+  "priority": {
+    "_comment": "1-99 = droppable if max_rows forces a trim (higher survives longer); 100 = pinned, never dropped.",
+    "open_pr": 20,
+    "pr": 25,
+    "k8s": 60,
+    "worktree": 15
+  },
+
+  "segments": {
+    "_comment": "Custom segments. command as an array execs directly (safest, no shell); command as a string, or inline, runs through bash -c. There's no privilege difference between the two -- inline just means the code lives here instead of an external script. THIS FILE IS EXECUTABLE CODE: treat it like your .bashrc.",
+    "k8s": {
+      "command": ["kubectl", "config", "current-context"],
+      "timeout": 2
+    },
+    "worktree": {
+      "command": "git worktree list 2>/dev/null | wc -l",
+      "timeout": 1
+    }
+  }
+}
