@@ -2,11 +2,27 @@
 # claude-awesome-status: a boxed statusline for Claude Code.
 # 5h/7d usage | model | context | cpu/ram | directory | git branch | PR status
 
+# Requires associative arrays, declare -n namerefs, and mapfile — all bash
+# 4.0+/4.3+. macOS ships bash 3.2 by default (frozen there since ~2007 for
+# GPLv3-licensing reasons), which understands none of them and fails with a
+# cryptic "declare: -A: invalid option" rather than this message unless we
+# check first. install.sh pins an absolute path to a verified-good bash for
+# exactly this reason; this check is the fallback for anyone who wired
+# settings.json up by hand.
+if (( BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 3) )); then
+  echo "claude-awesome-status requires bash 4.3 or newer (found bash $BASH_VERSION)." >&2
+  echo "On macOS the system bash is 3.2 by default — install a newer one with:" >&2
+  echo "  brew install bash" >&2
+  echo "then re-run install.sh, or point statusLine.command at that bash's" >&2
+  echo "absolute path directly (usually /opt/homebrew/bin/bash or /usr/local/bin/bash)." >&2
+  exit 1
+fi
+
 input=$(cat)
 
-# Emoji/CJK codepoints that render as 2 terminal columns but count as 1 bash
-# character — content_width() adds an extra column for each one it finds.
-WIDE_CHAR_CLASS='[\x{1F000}-\x{1FFFF}\x{2600}-\x{27BF}\x{2B00}-\x{2BFF}]'
+# Needed for the *([0-9;]) pattern content_width() uses below to strip ANSI
+# escapes via parameter expansion instead of a sed fork.
+shopt -s extglob
 
 badge() {
   local pct="$1" yellow="$2" red="$3" label="$4" trailing="$5"
@@ -221,18 +237,33 @@ if [ -n "$claude_pid" ]; then
 fi
 n_dashes=$((box_width - 2))
 
+# Pure bash, zero forks — deliberately not sed+grep -P+wc. grep -P is a GNU
+# extension; macOS's default BSD grep doesn't have it at all, and the
+# \x{1F000}-style codepoint ranges below are PCRE syntax with no valid POSIX
+# ERE equivalent, so there was no portable regex-based version of this to
+# fall back to. This is also the hottest path in the script (called on every
+# segment, every render), so the fork elimination is a real perf win too —
+# not just a portability fix.
 content_width() {
-  local content="$1"
-  local stripped=$(printf '%b' "$content" | sed -E 's/\x1b\[[0-9;]*m//g')
+  local content="$1" stripped ch cp i n wide_count=0
+  printf -v stripped '%b' "$content"
+  stripped="${stripped//$'\e'\[*([0-9;])m/}"
   # U+FE0F (emoji variation selector, e.g. the second codepoint in "⚠️") is a
   # zero-width modifier but bash counts it as a normal 1-column character —
   # strip it so it doesn't inflate the count.
   stripped="${stripped//$'\xef\xb8\x8f'/}"
-  local visible_len=${#stripped}
-  # Wide (emoji/CJK) codepoints render as 2 terminal columns but count as 1
-  # bash character, so each one found needs an extra column added.
-  local wide_count=$(printf '%s' "$stripped" | grep -oP "$WIDE_CHAR_CLASS" | wc -l)
-  echo $((visible_len + wide_count))
+  n=${#stripped}
+  for ((i = 0; i < n; i++)); do
+    ch=${stripped:i:1}
+    printf -v cp '%d' "'$ch"
+    # Wide (emoji/CJK) codepoints render as 2 terminal columns but count as 1
+    # bash character, so each one found needs an extra column added.
+    if   ((cp >= 0x1F000 && cp <= 0x1FFFF)); then ((wide_count++))
+    elif ((cp >= 0x2600  && cp <= 0x27BF));  then ((wide_count++))
+    elif ((cp >= 0x2B00  && cp <= 0x2BFF));  then ((wide_count++))
+    fi
+  done
+  echo $((n + wide_count))
 }
 
 if [ -n "$claude_pid" ]; then
@@ -285,7 +316,6 @@ if [ -n "$branch" ]; then
 fi
 
 pr_num=$(echo "$input" | jq -r '.pr.number // empty')
-pr_state=$(echo "$input" | jq -r '.pr.review_state // "open"')
 
 pr_str=""
 [ -n "$pr_num" ] && pr_str="PR#$pr_num"
@@ -320,7 +350,7 @@ fi
 load_str=""
 loadavg_file="${CAS_LOADAVG_FILE:-/proc/loadavg}"
 if [ -f "$loadavg_file" ]; then
-  read load1 load5 load15 < "$loadavg_file"
+  read -r load1 _ _ < "$loadavg_file"
   cpus=$(nproc 2>/dev/null || echo 1)
   load_pct=$(awk "BEGIN { printf \"%.0f\", ($load1 / $cpus) * 100 }")
   load_str=$(badge "$load_pct" "$thr_cpu_yellow" "$thr_cpu_red" "cpu" "$(printf '%d%%' "$load_pct")")
@@ -331,22 +361,6 @@ context_size=$(echo "$input" | jq -r '.context_window.context_window_size // emp
 
 context_str=""
 if [ -n "$used_pct" ] && [ -n "$context_size" ]; then
-  used_tokens=$(awk "BEGIN { printf \"%.0f\", $used_pct * $context_size / 100 }")
-  if [ "$used_tokens" -ge 1000000 ]; then
-    used_display=$(awk "BEGIN { printf \"%.1fm\", $used_tokens / 1000000 }")
-  elif [ "$used_tokens" -ge 1000 ]; then
-    used_display=$(awk "BEGIN { printf \"%.1fk\", $used_tokens / 1000 }")
-  else
-    used_display="$used_tokens"
-  fi
-  if [ "$context_size" -ge 1000000 ]; then
-    size_display=$(awk "BEGIN { printf \"%.1fm\", $context_size / 1000000 }")
-  elif [ "$context_size" -ge 1000 ]; then
-    size_display=$(awk "BEGIN { printf \"%.0fk\", $context_size / 1000 }")
-  else
-    size_display="$context_size"
-  fi
-
   context_str=$(badge "$used_pct" "$thr_context_yellow" "$thr_context_red" "ctx" "$(printf '%.0f%%' "$used_pct")")
 fi
 
@@ -390,11 +404,9 @@ declare -A SEG_TEXT
 
 ram_str=""
 if command -v free &>/dev/null; then
-  read used total used_bytes total_bytes < <(free -h | awk '/^Mem:/ { match($3, /^[0-9.]+/); used=substr($3, RSTART, RLENGTH); match($2, /^[0-9.]+/); total=substr($2, RSTART, RLENGTH); print used, total, $3, $2 }')
+  read -r used total < <(free -h | awk '/^Mem:/ { match($3, /^[0-9.]+/); used=substr($3, RSTART, RLENGTH); match($2, /^[0-9.]+/); total=substr($2, RSTART, RLENGTH); print used, total }')
   if [ -n "$used" ] && [ -n "$total" ]; then
-    used_num=$(echo "$used" | sed 's/G//')
-    total_num=$(echo "$total" | sed 's/G//')
-    ram_pct=$(awk "BEGIN { printf \"%.0f\", ($used_num / $total_num) * 100 }")
+    ram_pct=$(awk "BEGIN { printf \"%.0f\", ($used / $total) * 100 }")
     ram_str=$(badge "$ram_pct" "$thr_ram_yellow" "$thr_ram_red" "ram" "${ram_pct}%")
   fi
 fi
@@ -747,7 +759,7 @@ layout_row() {
 
 for ((k = 0; k < row_count; k++)); do
   layout_row "$k" "${rows[$k]}"
-  rows[$k]="$LAYOUT_RESULT"
+  rows[k]="$LAYOUT_RESULT"
 done
 
 right_col=$((n_dashes - 1))

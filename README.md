@@ -22,7 +22,8 @@ Rows wrap automatically to fit your terminal width, and every segment is padding
 
 ## Requirements
 
-- `bash` (4.3+), `jq`, `bc`, `awk`, `ps` — all standard on Linux and macOS
+- **`bash` 4.3+.** macOS ships bash 3.2 by default (frozen there for licensing reasons, not updated since ~2007) — this script needs newer than that. `install.sh` detects this automatically and points Claude Code at a qualifying bash's absolute path (installing one is a one-time `brew install bash` if you don't already have one). See [Install](#install).
+- `jq`, `bc`, `awk`, `ps` — all standard on Linux and macOS
 - [`gh`](https://cli.github.com/) (optional) — for the open-PR-count segment; the segment is simply omitted if it's not installed
 - For a **YAML** config specifically (JSON needs nothing extra): either [`yq`](https://github.com/mikefarah/yq) or `python3` with `PyYAML`. Neither installed and your config is YAML? It quietly falls back to built-in defaults instead of failing — see [Config file](#config-file).
 - A terminal font with color emoji support (e.g. [Noto Color Emoji](https://fonts.google.com/noto/specimen/Noto+Color+Emoji)) for the emoji glyphs to render properly
