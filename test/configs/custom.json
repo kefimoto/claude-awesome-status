@@ -1,0 +1,15 @@
+{
+  "groups": [
+    ["five_hour"],
+    ["dir"],
+    ["k8s", "worktree", "gitstat", "multiline", "hang", "badname!"]
+  ],
+  "segments": {
+    "k8s": { "command": ["echo", "prod-cluster"] },
+    "worktree": { "command": "echo hi tail" },
+    "gitstat": { "inline": "printf '\\033[33m%s dirty\\033[0m' 3" },
+    "multiline": { "inline": "printf 'line1\\nline2\\nline3'" },
+    "hang": { "command": ["sleep", "5"], "timeout": 1 },
+    "badname!": { "command": ["echo", "should not appear"] }
+  }
+}

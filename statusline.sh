@@ -414,8 +414,69 @@ SEG_TEXT[pr]="$pr_str"
 SEG_TEXT[open_pr]="$open_pr_str"
 SEG_TEXT[account]="$account_str"
 
-# A config can hide built-in segments by name; unknown names are harmless
-# since SEG_TEXT simply never had that key.
+# Unit separator used to join a row's segments before layout_row splits them
+# back apart — defined here (rather than down by wrap_segments, its only
+# other reader) so custom-segment sanitization below can strip it from
+# output that might otherwise smuggle in a phantom segment.
+SEG_SEP=$'\x1f'
+
+# A config's "segments" map defines custom segments: run a command (or an
+# inline shell snippet — same execution path, it's just stored in the config
+# file instead of an external script) and use its output as the segment
+# text. A name matching a built-in replaces it, since this only ever
+# overwrites SEG_TEXT[name] after the built-ins have already set it.
+#
+# This is the one place config content is executed, so every guard below is
+# load-bearing, not cosmetic:
+#   - name is restricted to a safe identifier before it ever reaches SEG_TEXT
+#     or a jq --arg;
+#   - timeout bounds a hung or slow command — the statusline redraws on
+#     every turn, so one bad segment must not freeze it, exactly like the
+#     existing timeout on gh and claude auth status above;
+#   - output is coerced to a single line: layout_row's SEG_SEP-delimited
+#     format assumes exactly that, and a stray newline would print outside
+#     the box entirely;
+#   - a literal SEG_SEP byte in the output is stripped so it can't be
+#     mistaken for a segment boundary and corrupt every wall position after
+#     it;
+#   - backslashes are doubled so the final printf '%b' (which interprets
+#     backslash escapes for the whole rendered line) can't be tricked into
+#     expanding attacker-controlled text into new ANSI codes.
+#
+# A config file is inherently as trusted as this script itself — Claude
+# Code already invokes statusline.sh as an arbitrary shell command from
+# settings.json, so a config's inline snippets grant no authority beyond
+# what the user already has.
+if [ -n "$cfg_json" ]; then
+  mapfile -t cfg_seg_names < <(jq -r '(.segments // {}) | keys[]?' "$cfg_json" 2>/dev/null)
+  for seg_name in "${cfg_seg_names[@]}"; do
+    [[ "$seg_name" =~ ^[A-Za-z0-9_-]{1,32}$ ]] || continue
+
+    seg_timeout="$(jq -r --arg n "$seg_name" '.segments[$n].timeout // 1' "$cfg_json" 2>/dev/null)"
+    [[ "$seg_timeout" =~ ^[0-9]+(\.[0-9]+)?$ ]] || seg_timeout=1
+
+    seg_cmd_is_array="$(jq -r --arg n "$seg_name" '(.segments[$n].command | type) == "array"' "$cfg_json" 2>/dev/null)"
+    seg_out=""
+    if [ "$seg_cmd_is_array" = "true" ]; then
+      # No shell involved: exec'd directly, so there are no quoting bugs to
+      # sanitize against in the first place.
+      mapfile -t seg_argv < <(jq -r --arg n "$seg_name" '.segments[$n].command[]' "$cfg_json" 2>/dev/null)
+      [ "${#seg_argv[@]}" -gt 0 ] && seg_out=$(timeout "${seg_timeout}s" "${seg_argv[@]}" </dev/null 2>/dev/null)
+    else
+      seg_code="$(jq -r --arg n "$seg_name" '.segments[$n].command // .segments[$n].inline // empty' "$cfg_json" 2>/dev/null)"
+      [ -n "$seg_code" ] && seg_out=$(timeout "${seg_timeout}s" bash -c "$seg_code" </dev/null 2>/dev/null)
+    fi
+
+    seg_out="${seg_out%%$'\n'*}"      # first line only
+    seg_out="${seg_out//$'\r'/}"      # no carriage returns
+    seg_out="${seg_out//$SEG_SEP/}"   # can't smuggle in a fake segment boundary
+    seg_out="${seg_out//\\/\\\\}"     # printf '%b' can't reinterpret these as escapes
+    [ -n "$seg_out" ] && SEG_TEXT[$seg_name]="$seg_out"
+  done
+fi
+
+# A config can hide any segment by name — built-in or custom; unknown names
+# are harmless since SEG_TEXT simply never had that key.
 if [ -n "$cfg_json" ]; then
   mapfile -t cfg_hide < <(jq -r '(.hide // empty) | if type == "array" then .[] | select(type == "string") else empty end' "$cfg_json" 2>/dev/null)
   for hidden in "${cfg_hide[@]:-}"; do
@@ -427,7 +488,6 @@ fi
 # content overruns the box — instead of overflowing, it wraps. Rows are kept
 # as raw segments (joined with a unit separator, not "│") so layout_row can
 # later distribute padding per-segment instead of per-row.
-SEG_SEP=$'\x1f'
 wrap_segments() {
   local -n _segs=$1
   local -n _rows=$2
