@@ -535,15 +535,112 @@ if [ -n "$cfg_json" ]; then
   [ "${#cfg_groups[@]}" -gt 0 ] && SEG_GROUPS=("${cfg_groups[@]}")
 fi
 
-rows=()
-for group in "${SEG_GROUPS[@]}"; do
-  seg_values=()
-  for name in $group; do
-    val="${SEG_TEXT[$name]:-}"
-    [ -n "$val" ] && seg_values+=("$val")
+# Per-segment priority (1-100, higher survives longer) and an optional
+# max_rows target the renderer tries to respect by dropping the
+# lowest-priority segments first. Priority 100 means pinned — never
+# dropped — which is why the candidate filter below excludes it outright
+# rather than treating it as an very-large-but-ordinary value: a pinned
+# segment must never be dropped, whereas a merely-high-priority one still
+# could be if nothing else is left to drop.
+declare -A SEG_PRIO
+for _pinned in five_hour seven_day model dir; do SEG_PRIO[$_pinned]=100; done
+SEG_PRIO[cpu]=60
+SEG_PRIO[ram]=60
+SEG_PRIO[context]=70
+SEG_PRIO[context_size]=40
+SEG_PRIO[claude_ram]=30
+SEG_PRIO[repo]=45
+SEG_PRIO[branch]=65
+SEG_PRIO[pr]=25
+SEG_PRIO[open_pr]=20
+SEG_PRIO[account]=10
+# These built-in priorities are only ever consulted when max_rows is set
+# (see below), so they're output-neutral for every existing golden — a
+# config that sets max_rows without customizing priority still gets a
+# sensible default drop order instead of an arbitrary one.
+
+if [ -n "$cfg_json" ]; then
+  mapfile -t cfg_prio_names < <(jq -r '(.priority // {}) | keys[]?' "$cfg_json" 2>/dev/null)
+  for prio_name in "${cfg_prio_names[@]}"; do
+    [[ "$prio_name" =~ ^[A-Za-z0-9_-]{1,32}$ ]] || continue
+    prio_val="$(jq -r --arg n "$prio_name" '.priority[$n] // empty' "$cfg_json" 2>/dev/null)"
+    if [[ "$prio_val" =~ ^[0-9]+$ ]] && [ "$prio_val" -ge 1 ] && [ "$prio_val" -le 100 ]; then
+      SEG_PRIO[$prio_name]="$prio_val"
+    fi
   done
-  wrap_segments seg_values rows
-done
+fi
+
+max_rows="$(cfg_get_num '.max_rows // empty' 0)"
+
+# A pure function of the current SEG_DROPPED set (declared just below): wipes
+# and rebuilds `rows`/`row_count` from SEG_GROUPS/SEG_TEXT, skipping any
+# dropped name. Called once up front, then once per drop/restore step.
+declare -A SEG_DROPPED
+build_rows() {
+  rows=()
+  local group name val
+  for group in "${SEG_GROUPS[@]}"; do
+    seg_values=()
+    for name in $group; do
+      [ "${SEG_DROPPED[$name]:-0}" = "1" ] && continue
+      val="${SEG_TEXT[$name]:-}"
+      [ -n "$val" ] && seg_values+=("$val")
+    done
+    wrap_segments seg_values rows
+  done
+  row_count=${#rows[@]}
+}
+
+build_rows
+
+# Unset/zero/negative/non-numeric all mean "unlimited" — a typo here must
+# never silently blank the panel — and this whole block is skipped in that
+# case, which is what keeps the no-config, no-max_rows default path
+# identical to the code before this feature existed.
+if [[ "$max_rows" =~ ^[0-9]+$ ]] && [ "$max_rows" -ge 1 ] && [ "$row_count" -gt "$max_rows" ]; then
+  candidates=()
+  for group in "${SEG_GROUPS[@]}"; do
+    for name in $group; do
+      [ -n "${SEG_TEXT[$name]:-}" ] || continue
+      prio="${SEG_PRIO[$name]:-50}"
+      [ "$prio" -ge 100 ] && continue
+      candidates+=("$prio|$name")
+    done
+  done
+
+  if [ "${#candidates[@]}" -gt 0 ]; then
+    # Ascending priority, so the lowest-priority segment is tried first;
+    # `sort -s` is stable, so ties keep declaration order rather than an
+    # arbitrary one.
+    mapfile -t sorted_candidates < <(printf '%s\n' "${candidates[@]}" | sort -t'|' -k1,1n -s)
+
+    # Phase 1: drop one segment per iteration and rewrap, until the target
+    # is met or every candidate is gone. A drop that buys no row is normal
+    # (packing is coarse-grained) and must not stop the loop early.
+    dropped_order=()
+    for entry in "${sorted_candidates[@]}"; do
+      [ "$row_count" -le "$max_rows" ] && break
+      dropped_name="${entry#*|}"
+      SEG_DROPPED[$dropped_name]=1
+      dropped_order+=("$dropped_name")
+      build_rows
+    done
+
+    # Phase 2: 1-opt restore. Phase 1 dropped a whole prefix of the priority
+    # order and can spend a segment for nothing, so walk the casualties from
+    # most to least valuable (the reverse of drop order) and put back
+    # whichever ones the target can still afford.
+    for ((_i = ${#dropped_order[@]} - 1; _i >= 0; _i--)); do
+      restore_name="${dropped_order[$_i]}"
+      unset "SEG_DROPPED[$restore_name]"
+      build_rows
+      if [ "$row_count" -gt "$max_rows" ]; then
+        SEG_DROPPED[$restore_name]=1
+        build_rows
+      fi
+    done
+  fi
+fi
 row_count=${#rows[@]}
 
 # --- Border palette --------------------------------------------------------
