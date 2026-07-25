@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Deterministic `ps` stub for render tests.
+#   comm= -> always "claude", so the ancestry walk stops at the first candidate
+#   tty=  -> "?", so box_width falls back to the fixed default (80)
+#   rss=  -> fixed self RSS
+#   -eo   -> empty table, so the child-RSS sum is a stable 0
+case "$*" in
+  *"-o comm="*) echo "claude" ;;
+  *"-o ppid="*) echo "1" ;;
+  *"-o tty="*)  echo "?" ;;
+  *"-o rss="*)  echo "412000" ;;
+  *"-eo pid,ppid,rss"*) : ;;
+  *) : ;;
+esac

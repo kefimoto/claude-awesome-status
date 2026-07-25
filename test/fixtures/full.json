@@ -1,0 +1,12 @@
+{
+  "model": { "display_name": "Claude Sonnet 5" },
+  "fast_mode": true,
+  "thinking": { "enabled": true },
+  "context_window": { "context_window_size": 1000000, "used_percentage": 42 },
+  "workspace": { "current_dir": "/home/example/repos/claude-awesome-status" },
+  "pr": { "number": 128, "review_state": "approved" },
+  "rate_limits": {
+    "five_hour": { "used_percentage": 34, "resets_at": 1800007980 },
+    "seven_day": { "used_percentage": 61, "resets_at": 1800270000 }
+  }
+}

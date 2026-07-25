@@ -1,0 +1,11 @@
+{
+  "model": { "display_name": "Claude Opus 5" },
+  "fast_mode": false,
+  "thinking": { "enabled": false },
+  "context_window": { "context_window_size": 200000, "used_percentage": 88 },
+  "workspace": { "current_dir": "/home/example/very/deeply/nested/workspace/path/that/keeps/going/for/a/while/src" },
+  "rate_limits": {
+    "five_hour": { "used_percentage": 91, "resets_at": 1800001800 },
+    "seven_day": { "used_percentage": 55, "resets_at": 1800400000 }
+  }
+}

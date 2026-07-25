@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Freeze the clock so reset countdowns render identically every run.
+if [ "$1" = "+%s" ]; then echo 1800000000; else /usr/bin/date "$@"; fi

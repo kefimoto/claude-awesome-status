@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Deterministic `git` stub. Only paths containing "repos" look like a checkout, so a
+# fixture can exercise the in-repo or the not-a-repo path purely by choosing its
+# workspace.current_dir.
+case "$*" in
+  *repos*)
+    case "$*" in
+      *"branch --show-current"*) echo "main" ;;
+      *"remote get-url origin"*) echo "https://github.com/kefimoto/claude-awesome-status.git" ;;
+      *) : ;;
+    esac
+    ;;
+  *) exit 1 ;;
+esac

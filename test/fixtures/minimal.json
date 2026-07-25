@@ -1,0 +1,5 @@
+{
+  "model": { "display_name": "Claude Haiku 4.5" },
+  "context_window": { "context_window_size": 200000, "used_percentage": 4 },
+  "workspace": { "current_dir": "/home/example/scratch" }
+}

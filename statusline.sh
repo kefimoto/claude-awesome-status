@@ -168,7 +168,7 @@ pr_str=""
 
 open_pr_str=""
 if command -v gh &>/dev/null && [ -n "$repo_slug" ]; then
-  cache_file="/tmp/.claude-statusline-pr-cache-$(echo "$repo_slug" | tr '/' '_')"
+  cache_file="${CAS_CACHE_DIR:-/tmp}/.claude-statusline-pr-cache-$(echo "$repo_slug" | tr '/' '_')"
   now_epoch=$(date +%s)
   cache_age=999999
   if [ -f "$cache_file" ]; then
@@ -194,8 +194,9 @@ if command -v claude &>/dev/null; then
 fi
 
 load_str=""
-if [ -f /proc/loadavg ]; then
-  read load1 load5 load15 < /proc/loadavg
+loadavg_file="${CAS_LOADAVG_FILE:-/proc/loadavg}"
+if [ -f "$loadavg_file" ]; then
+  read load1 load5 load15 < "$loadavg_file"
   cpus=$(nproc 2>/dev/null || echo 1)
   load_pct=$(awk "BEGIN { printf \"%.0f\", ($load1 / $cpus) * 100 }")
   load_str=$(badge "$load_pct" 70 100 "cpu" "$(printf '%d%%' "$load_pct")")
@@ -350,7 +351,7 @@ hue_color() {
 
 # Rainbow advances one tick per statusline execution, so the gradient
 # visibly shifts each time this script runs.
-tick_file="/tmp/.claude-statusline-tick"
+tick_file="${CAS_TICK_FILE:-/tmp/.claude-statusline-tick}"
 tick_steps=40
 tick=0
 [ -f "$tick_file" ] && tick=$(cat "$tick_file")

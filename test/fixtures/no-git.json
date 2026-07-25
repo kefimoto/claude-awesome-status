@@ -1,0 +1,10 @@
+{
+  "model": { "display_name": "Claude Fable 5" },
+  "fast_mode": false,
+  "thinking": { "enabled": true },
+  "context_window": { "context_window_size": 500000, "used_percentage": 77 },
+  "workspace": { "current_dir": "/tmp" },
+  "rate_limits": {
+    "five_hour": { "used_percentage": 12, "resets_at": 1800014400 }
+  }
+}

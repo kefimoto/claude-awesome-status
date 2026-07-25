@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+  echo '{"loggedIn":true,"email":"you@example.com"}'
+fi
